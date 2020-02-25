@@ -256,7 +256,16 @@ impl Condvar {
     /// with a different `Mutex` object.
     #[inline]
     pub fn wait<T: ?Sized>(&self, mutex_guard: &mut MutexGuard<'_, T>) {
-        self.wait_until_internal(unsafe { MutexGuard::mutex(mutex_guard).raw() }, None);
+        self.wait_raw(unsafe { MutexGuard::mutex(mutex_guard).raw() });
+    }
+
+    /// Blocks the current thread until this condition variable receives a
+    /// notification.
+    ///
+    /// This works the same as `wait()` but takes a `RawMutex`.
+    #[inline]
+    pub fn wait_raw(&self, raw_mutex: &RawMutex) {
+        self.wait_until_internal(raw_mutex, None);
     }
 
     /// Waits on this condition variable for a notification, timing out after
@@ -288,10 +297,23 @@ impl Condvar {
         mutex_guard: &mut MutexGuard<'_, T>,
         timeout: Instant,
     ) -> WaitTimeoutResult {
-        self.wait_until_internal(
+        self.wait_until_raw(
             unsafe { MutexGuard::mutex(mutex_guard).raw() },
-            Some(timeout),
+            timeout,
         )
+    }
+
+    /// Waits on this condition variable for a notification, timing out after
+    /// the specified time instant.
+    ///
+    /// This works the same as `wait_until()` but takes a `RawMutex`.
+    #[inline]
+    pub fn wait_until_raw(
+        &self,
+        raw_mutex: &RawMutex,
+        timeout: Instant,
+    ) -> WaitTimeoutResult {
+        self.wait_until_internal(raw_mutex, Some(timeout))
     }
 
     // This is a non-generic function to reduce the monomorphization cost of
@@ -391,9 +413,22 @@ impl Condvar {
         &self,
         mutex_guard: &mut MutexGuard<'_, T>,
         timeout: Duration,
+        ) -> WaitTimeoutResult {
+        self.wait_for_raw(unsafe { MutexGuard::mutex(mutex_guard).raw() }, timeout)
+    }
+
+    /// Waits on this condition variable for a notification, timing out after a
+    /// specified duration.
+    ///
+    /// This works the same as `wait_for()` but takes a `RawMutex`.
+    #[inline]
+    pub fn wait_for_raw(
+        &self,
+        raw_mutex: &RawMutex,
+        timeout: Duration,
     ) -> WaitTimeoutResult {
         let deadline = util::to_deadline(timeout);
-        self.wait_until_internal(unsafe { MutexGuard::mutex(mutex_guard).raw() }, deadline)
+        self.wait_until_internal(raw_mutex, deadline)
     }
 }
 
@@ -438,6 +473,27 @@ mod tests {
             c2.notify_one();
         });
         c.wait(&mut g);
+    }
+
+    #[test]
+    fn wait_raw() {
+        use lock_api::RawMutex;
+
+        let m = Arc::new(Mutex::new(()));
+        let m2 = m.clone();
+        let c = Arc::new(Condvar::new());
+        let c2 = c.clone();
+
+        let rm = unsafe { m.raw() };
+        rm.lock();
+
+        let _t = thread::spawn(move || {
+            let _g = m2.lock();
+            c2.notify_one();
+        });
+
+        c.wait_raw(rm);
+        rm.unlock();
     }
 
     #[test]
